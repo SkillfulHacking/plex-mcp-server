@@ -113,7 +113,7 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
         debug=debug,
         routes=[
             Mount("/sse", app=sse_asgi),                 # accepts GET and POST
-            Mount("/messages/", app=sse.handle_post_message),
+            Mount("/messages/", app=safe_messages),
         ],
     )
 
@@ -136,6 +136,8 @@ if __name__ == "__main__":
         # Run with stdio transport (original method)
         mcp.run(transport='stdio')
     else:
+        # Ensure PMS connection & tool registration are ready
+        connect_to_plex()
         # Run with SSE transport
         mcp_server = mcp._mcp_server  # Access the underlying MCP server
         starlette_app = create_starlette_app(mcp_server, debug=args.debug)

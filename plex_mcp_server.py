@@ -107,12 +107,17 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
             resp = JSONResponse({"error": "session closed"}, status_code=410)
             await resp(scope, receive, send)
 
-    # IMPORTANT: mount ASGI apps with Mount(); put messages UNDER /sse
+    sse_app = Starlette(
+        routes=[
+            Route("/", endpoint=sse_asgi, methods=["GET", "POST"]),  # /sse  (GET/POST)
+            Mount("/messages/", app=safe_messages),                  # /sse/messages/ (POST)
+        ]
+    )
+
     return Starlette(
         debug=debug,
         routes=[
-            Mount("/sse", app=sse_asgi),                  # /sse  (GET/POST)
-            Mount("/sse/messages/", app=safe_messages),   # /sse/messages/  (POST)
+            Mount("/sse", app=sse_app),
         ],
     )
 

@@ -88,35 +88,31 @@ from modules.client import (
 )
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    # Advertise messages under /messages/
-    sse = SseServerTransport("/messages/")
+    # Advertise absolute ingress path so the 'endpoint' event points to /sse/messages/
+    sse = SseServerTransport("/sse/messages/")
 
-    # ASGI app for the SSE endpoint (accepts GET & POST)
     async def sse_asgi(scope, receive, send):
-        async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-            await mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options(),
-            )
+        async with sse.connect_sse(scope, receive, send) as (r, w):
+            await mcp_server.run(r, w, mcp_server.create_initialization_options())
 
-    # Wrap message ingress to avoid crashes on stale posts
     async def safe_messages(scope, receive, send):
+        # guard: only POST is allowed here
+        if scope.get("type") != "http" or scope.get("method") != "POST":
+            await JSONResponse({"error": "method not allowed"}, status_code=405)(scope, receive, send)
+            return
         try:
             await sse.handle_post_message(scope, receive, send)
         except ClosedResourceError:
-            resp = JSONResponse({"error": "session closed"}, status_code=410)
-            await resp(scope, receive, send)
+            await JSONResponse({"error": "session closed"}, status_code=410)(scope, receive, send)
 
-    # IMPORTANT: Mount ASGI apps with Mount(); no Route() for sse_asgi.
     return Starlette(
         debug=debug,
         routes=[
-            Mount("/sse", app=sse_asgi),                 # /sse           (GET/POST)
-            Mount("/messages/", app=safe_messages),      # /messages/     (POST)
+            # IMPORTANT: mount the *more specific* path first
+            Mount("/sse/messages/", app=safe_messages),  # /sse/messages/  (POST)
+            Mount("/sse", app=sse_asgi),                 # /sse            (GET/POST)
         ],
     )
-
 
 if __name__ == "__main__":
     # Setup command line arguments

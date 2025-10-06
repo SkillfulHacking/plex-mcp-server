@@ -5,6 +5,7 @@ from starlette.routing import Mount, Route # type: ignore
 from mcp.server import Server # type: ignore
 from mcp.server.sse import SseServerTransport # type: ignore
 from starlette.requests import Request # type: ignore
+from starlette.responses import PlainTextResponse # type: ignore
 
 # Import the main mcp instance from modules
 from modules import mcp, connect_to_plex
@@ -85,17 +86,21 @@ from modules.client import (
     client_set_streams
 )
 
-def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can serve the provided mcp server with SSE.
-    - GET /sse  -> used by Home Assistant MCP client
-    - POST /sse -> used by some MCP clients (e.g., OpenWebUI)
-    - POST /messages/?session_id=... -> client-to-server message ingress
-    """
-    sse = SseServerTransport("/messages/")
-
-    # ASGI endpoint (not Request->Response). Starlette treats callables with the
-    # (scope, receive, send) signature as an ASGI app, so we don't need to return a Response.
+    # ASGI app for the SSE endpoint; accepts both GET and POST
     async def sse_asgi(scope, receive, send):
+        # Only HTTP is supported here
+        if scope.get("type") != "http":
+            resp = PlainTextResponse("Unsupported scope type", status_code=400)
+            await resp(scope, receive, send)
+            return
+
+        method = scope.get("method", "GET").upper()
+        if method not in ("GET", "POST"):
+            resp = PlainTextResponse("Method Not Allowed", status_code=405)
+            await resp(scope, receive, send)
+            return
+
+        # Hand the connection to the MCP SSE transport (it will write the response)
         async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await mcp_server.run(
                 read_stream,
@@ -103,12 +108,13 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
                 mcp_server.create_initialization_options(),
             )
 
+    # Mount the ASGI apps:
+    # - /sse        -> our ASGI SSE handler (GET or POST)
+    # - /messages/  -> transport's message ingress handler (ASGI app)
     return Starlette(
         debug=debug,
         routes=[
-            # Accept both GET and POST on /sse to satisfy HA (GET) and OpenWebUI (POST)
-            Route("/sse", endpoint=sse_asgi, methods=["GET", "POST"]),
-            # Ingress for client->server messages (HA posts here)
+            Mount("/sse", app=sse_asgi),                 # accepts GET and POST
             Mount("/messages/", app=sse.handle_post_message),
         ],
     )

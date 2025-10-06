@@ -1,11 +1,12 @@
 import argparse
 import uvicorn # type: ignore
+from anyio import ClosedResourceError
 from starlette.applications import Starlette # type: ignore
 from starlette.routing import Mount, Route # type: ignore
 from mcp.server import Server # type: ignore
 from mcp.server.sse import SseServerTransport # type: ignore
 from starlette.requests import Request # type: ignore
-from starlette.responses import PlainTextResponse # type: ignore
+from starlette.responses import JSONResponse # type: ignore
 
 # Import the main mcp instance from modules
 from modules import mcp, connect_to_plex
@@ -91,19 +92,6 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
     sse = SseServerTransport("/messages/")
     # ASGI app for the SSE endpoint; accepts both GET and POST
     async def sse_asgi(scope, receive, send):
-        # Only HTTP is supported here
-        if scope.get("type") != "http":
-            resp = PlainTextResponse("Unsupported scope type", status_code=400)
-            await resp(scope, receive, send)
-            return
-
-        method = scope.get("method", "GET").upper()
-        if method not in ("GET", "POST"):
-            resp = PlainTextResponse("Method Not Allowed", status_code=405)
-            await resp(scope, receive, send)
-            return
-
-        # Hand the connection to the MCP SSE transport (it will write the response)
         async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await mcp_server.run(
                 read_stream,
@@ -111,6 +99,13 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
                 mcp_server.create_initialization_options(),
             )
 
+    # NEW: wrapper that catches ClosedResourceError so stale posts don't crash the server
+    async def safe_messages(scope, receive, send):
+        try:
+            await sse.handle_post_message(scope, receive, send)
+        except ClosedResourceError:
+            resp = JSONResponse({"error": "session closed"}, status_code=410)
+            await resp(scope, receive, send)
     # Mount the ASGI apps:
     # - /sse        -> our ASGI SSE handler (GET or POST)
     # - /messages/  -> transport's message ingress handler (ASGI app)

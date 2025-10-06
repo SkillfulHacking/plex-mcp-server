@@ -88,9 +88,8 @@ from modules.client import (
 )
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    # Advertise absolute ingress path so the 'endpoint' event points to /sse/messages/
-    sse = SseServerTransport("/sse/messages/")
-
+    sse = SseServerTransport("/messages/")
+    
     async def sse_asgi(scope, receive, send):
         async with sse.connect_sse(scope, receive, send) as (r, w):
             await mcp_server.run(r, w, mcp_server.create_initialization_options())
@@ -104,14 +103,23 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
             await sse.handle_post_message(scope, receive, send)
         except ClosedResourceError:
             await JSONResponse({"error": "session closed"}, status_code=410)(scope, receive, send)
+            
+# Sub-app mounted at /sse so the final paths are:
+    #   /sse                (SSE open)
+    #   /sse/messages/      (POST messages)
+    sse_app = Starlette(
+        routes=[
+            # NOTE: Route(...) is correct here because this endpoint is Request->Response;
+            # Starlette will call our ASGI handler with (request), which wraps scope/recv/send.
+            Route("/", endpoint=sse_asgi, methods=["GET", "POST"]),
+            Mount("/messages/", app=safe_messages),
+        ]
+    )
 
+    # TOP-LEVEL: only mount the sub-app at /sse. DO NOT also mount /sse/messages/ at root.
     return Starlette(
         debug=debug,
-        routes=[
-            # IMPORTANT: mount the *more specific* path first
-            Mount("/sse/messages/", app=safe_messages),  # /sse/messages/  (POST)
-            Mount("/sse", app=sse_asgi),                 # /sse            (GET/POST)
-        ],
+        routes=[Mount("/sse", app=sse_app)],
     )
 
 if __name__ == "__main__":

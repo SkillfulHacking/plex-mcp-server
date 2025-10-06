@@ -87,14 +87,16 @@ from modules.client import (
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
     """Create a Starlette application that can serve the provided mcp server with SSE."""
+    - GET /sse  -> used by Home Assistant MCP client
+    - POST /sse -> used by some MCP clients (e.g., OpenWebUI)
+    - POST /messages/?session_id=... -> client-to-server message ingress
+    """
     sse = SseServerTransport("/messages/")
 
-    async def handle_sse(request: Request) -> None:
-        async with sse.connect_sse(
-            request.scope,
-            request.receive,
-            request._send,  # noqa: SLF001
-        ) as (read_stream, write_stream):
+    # ASGI endpoint (not Request->Response). Starlette treats callables with the
+    # (scope, receive, send) signature as an ASGI app, so we don't need to return a Response.
+    async def sse_asgi(scope, receive, send):
+        async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await mcp_server.run(
                 read_stream,
                 write_stream,
@@ -104,7 +106,9 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
     return Starlette(
         debug=debug,
         routes=[
-            Route("/sse", endpoint=handle_sse),
+            # Accept both GET and POST on /sse to satisfy HA (GET) and OpenWebUI (POST)
+            Route("/sse", endpoint=sse_asgi, methods=["GET", "POST"]),
+            # Ingress for client->server messages (HA posts here)
             Mount("/messages/", app=sse.handle_post_message),
         ],
     )

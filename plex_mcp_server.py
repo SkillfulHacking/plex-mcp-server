@@ -88,9 +88,8 @@ from modules.client import (
 )
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    # Build an SSE transport whose message ingress lives under /messages/
     sse = SseServerTransport("/messages/")
-    # ASGI app for the SSE endpoint; accepts both GET and POST
+
     async def sse_asgi(scope, receive, send):
         async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await mcp_server.run(
@@ -99,21 +98,25 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
                 mcp_server.create_initialization_options(),
             )
 
-    # NEW: wrapper that catches ClosedResourceError so stale posts don't crash the server
     async def safe_messages(scope, receive, send):
         try:
             await sse.handle_post_message(scope, receive, send)
         except ClosedResourceError:
             resp = JSONResponse({"error": "session closed"}, status_code=410)
             await resp(scope, receive, send)
-    # Mount the ASGI apps:
-    # - /sse        -> our ASGI SSE handler (GET or POST)
-    # - /messages/  -> transport's message ingress handler (ASGI app)
+
+    # Mount both the SSE endpoint and the messages ingress UNDER /sse
+    sse_app = Starlette(
+        routes=[
+            Route("/", endpoint=sse_asgi, methods=["GET", "POST"]),  # /sse (GET/POST)
+            Mount("/messages/", app=safe_messages),                  # /sse/messages/
+        ]
+    )
+
     return Starlette(
         debug=debug,
         routes=[
-            Mount("/sse", app=sse_asgi),                 # accepts GET and POST
-            Mount("/messages/", app=safe_messages),
+            Mount("/sse", app=sse_app),  # everything lives under /sse
         ],
     )
 

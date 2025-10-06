@@ -90,6 +90,7 @@ from modules.client import (
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
     sse = SseServerTransport("/messages/")
 
+    # ASGI app for the SSE endpoint (accepts GET or POST)
     async def sse_asgi(scope, receive, send):
         async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await mcp_server.run(
@@ -98,6 +99,7 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
                 mcp_server.create_initialization_options(),
             )
 
+    # Wrap message ingress so stale posts don't crash the server
     async def safe_messages(scope, receive, send):
         try:
             await sse.handle_post_message(scope, receive, send)
@@ -105,18 +107,12 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
             resp = JSONResponse({"error": "session closed"}, status_code=410)
             await resp(scope, receive, send)
 
-    # Mount both the SSE endpoint and the messages ingress UNDER /sse
-    sse_app = Starlette(
-        routes=[
-            Route("/", endpoint=sse_asgi, methods=["GET", "POST"]),  # /sse (GET/POST)
-            Mount("/messages/", app=safe_messages),                  # /sse/messages/
-        ]
-    )
-
+    # IMPORTANT: mount ASGI apps with Mount(); put messages UNDER /sse
     return Starlette(
         debug=debug,
         routes=[
-            Mount("/sse", app=sse_app),  # everything lives under /sse
+            Mount("/sse", app=sse_asgi),                  # /sse  (GET/POST)
+            Mount("/sse/messages/", app=safe_messages),   # /sse/messages/  (POST)
         ],
     )
 

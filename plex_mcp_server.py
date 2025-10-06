@@ -88,8 +88,8 @@ from modules.client import (
 )
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    # Advertise messages under /sse/messages/
-    sse = SseServerTransport("/sse/messages/")
+    # Advertise messages under /messages/
+    sse = SseServerTransport("/messages/")
 
     # ASGI app for the SSE endpoint (accepts GET & POST)
     async def sse_asgi(scope, receive, send):
@@ -113,7 +113,7 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
         debug=debug,
         routes=[
             Mount("/sse", app=sse_asgi),                 # /sse           (GET/POST)
-            Mount("/sse/messages/", app=safe_messages),  # /sse/messages/ (POST)
+            Mount("/messages/", app=safe_messages),      # /messages/     (POST)
         ],
     )
 

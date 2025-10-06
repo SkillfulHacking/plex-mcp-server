@@ -86,6 +86,9 @@ from modules.client import (
     client_set_streams
 )
 
+def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
+    # Build an SSE transport whose message ingress lives under /messages/
+    sse = SseServerTransport("/messages/")
     # ASGI app for the SSE endpoint; accepts both GET and POST
     async def sse_asgi(scope, receive, send):
         # Only HTTP is supported here

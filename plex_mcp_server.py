@@ -88,14 +88,16 @@ from modules.client import (
 )
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
+    # Advertise a RELATIVE messages path; we’ll mount it under /sse
     sse = SseServerTransport("/messages/")
-    
+
+    # ASGI app for the SSE endpoint (GET/POST)
     async def sse_asgi(scope, receive, send):
         async with sse.connect_sse(scope, receive, send) as (r, w):
             await mcp_server.run(r, w, mcp_server.create_initialization_options())
 
+    # Message ingress with safety (POST only; return 410 on closed sessions)
     async def safe_messages(scope, receive, send):
-        # guard: only POST is allowed here
         if scope.get("type") != "http" or scope.get("method") != "POST":
             await JSONResponse({"error": "method not allowed"}, status_code=405)(scope, receive, send)
             return
@@ -103,23 +105,23 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
             await sse.handle_post_message(scope, receive, send)
         except ClosedResourceError:
             await JSONResponse({"error": "session closed"}, status_code=410)(scope, receive, send)
-            
-# Sub-app mounted at /sse so the final paths are:
-    #   /sse                (SSE open)
-    #   /sse/messages/      (POST messages)
+
+    # NESTED pattern (canonical):
+    #   /sse               -> SSE stream (ASGI)
+    #   /sse/messages/     -> POST messages (ASGI)
     sse_app = Starlette(
         routes=[
-            # NOTE: Route(...) is correct here because this endpoint is Request->Response;
-            # Starlette will call our ASGI handler with (request), which wraps scope/recv/send.
-            Route("/", endpoint=sse_asgi, methods=["GET", "POST"]),
-            Mount("/messages/", app=safe_messages),
+            # ASGI apps must be mounted with Mount(..., app=...)
+            Mount("/", app=sse_asgi),                 # /sse  (GET/POST)
+            Mount("/messages/", app=safe_messages),   # /sse/messages/ (POST)
         ]
     )
 
-    # TOP-LEVEL: only mount the sub-app at /sse. DO NOT also mount /sse/messages/ at root.
     return Starlette(
         debug=debug,
-        routes=[Mount("/sse", app=sse_app)],
+        routes=[
+            Mount("/sse", app=sse_app)  # one mount only; no other /sse or /sse/messages mounts
+        ],
     )
 
 if __name__ == "__main__":

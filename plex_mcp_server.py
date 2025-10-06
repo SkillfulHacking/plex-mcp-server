@@ -86,7 +86,7 @@ from modules.client import (
 )
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can serve the provided mcp server with SSE."""
+    """Create a Starlette application that can serve the provided mcp server with SSE.
     - GET /sse  -> used by Home Assistant MCP client
     - POST /sse -> used by some MCP clients (e.g., OpenWebUI)
     - POST /messages/?session_id=... -> client-to-server message ingress
